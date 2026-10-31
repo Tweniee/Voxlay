@@ -56,7 +56,7 @@ def lan_candidates():
 def _handler(fonts):
     """Request handler serving only index.html and the whitelisted fonts; it never touches Qt."""
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Tweniee"
+        server_version = "Voxlay"
 
         def log_message(self, *_args):
             pass
@@ -97,7 +97,7 @@ class CaptionServer(QObject):
     def __init__(self, token="", parent=None):
         super().__init__(parent)
         self._token = token
-        self._ws = QWebSocketServer("Tweniee", QWebSocketServer.SslMode.NonSecureMode, self)
+        self._ws = QWebSocketServer("Voxlay", QWebSocketServer.SslMode.NonSecureMode, self)
         self._ws.newConnection.connect(self._on_connection)
         self._httpd = None
         self._thread = None
@@ -128,7 +128,7 @@ class CaptionServer(QObject):
                 continue
             httpd.daemon_threads = True
             self._httpd = httpd
-            self._thread = threading.Thread(target=httpd.serve_forever, name="tweniee-http", daemon=True)
+            self._thread = threading.Thread(target=httpd.serve_forever, name="voxlay-http", daemon=True)
             self._thread.start()
             self._port = http_port
             self._ip = ip or lan_ip()

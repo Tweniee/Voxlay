@@ -129,6 +129,7 @@ def _rms(block):
 class TranscriptionWorker(QThread):
     """Streams partial captions: re-transcribes the current utterance as audio arrives."""
     caption = Signal(str, str)
+    committed = Signal(str)
     status = Signal(str)
     theme_changed = Signal()
 
@@ -250,6 +251,7 @@ class TranscriptionWorker(QThread):
             text = re.sub(r"\s{2,}", " ", TRIGGER_RE.sub("", romanized)).strip(" ,.!?")
             if text:
                 self._committed = f"{self._committed} {text}".strip()[-DISPLAY_CHARS * 2:]
+                self.committed.emit(text)
         finally:
             # Always reset, or a failed pass would re-commit on every following block.
             self._partial = ""

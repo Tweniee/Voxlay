@@ -2,7 +2,7 @@ import random
 from collections import deque
 from PySide6.QtCore import QObject, QTimer, Signal
 
-HOST = "host"            # pseudo client id for the machine running Tweniee
+HOST = "host"            # pseudo client id for the machine running Voxlay
 STAGGER_MS = (150, 250)  # pause between chunks of one phrase
 MAX_PENDING = 12         # chunks waiting to be sent; the oldest are dropped beyond this
 

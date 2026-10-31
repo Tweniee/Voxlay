@@ -103,7 +103,7 @@ def _clamp(value, low, high):
 
 
 def _settings():
-    return QSettings("Tweniee", "Tweniee")
+    return QSettings("Voxlay", "Voxlay")
 
 
 @dataclass(frozen=True)
