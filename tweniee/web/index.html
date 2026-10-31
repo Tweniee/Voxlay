@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1A0B2E">
+<title>Tweniee</title>
+<style>
+  :root {
+    --bg-top: #1A0B2E;
+    --bg-bottom: #3B0A45;
+    --text: #FFFFFF;
+    --accent: #FFD23F;
+    --glow: none;
+    --font: sans-serif;
+    --transform: none;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: linear-gradient(135deg, var(--bg-top), var(--bg-bottom));
+    color: var(--text); font-family: var(--font);
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  /* Soft accent light behind the caption, like the desktop overlay. */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 62%);
+  }
+  #stage {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  #caption {
+    display: inline-block; max-width: 92vw; text-align: center; line-height: 1.12;
+    font-family: var(--font); text-transform: var(--transform); text-shadow: var(--glow);
+    color: var(--text); overflow-wrap: normal; word-break: normal;
+  }
+  #caption.pop { animation: pop 260ms cubic-bezier(.2, .8, .2, 1) both; }
+  @keyframes pop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+  #status {
+    position: fixed; left: 14px; bottom: 12px; display: flex; align-items: center; gap: 8px;
+    font: 600 12px/1 system-ui, sans-serif; letter-spacing: .08em; color: rgba(255, 255, 255, .45);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #dot { width: 9px; height: 9px; border-radius: 50%; background: #e5484d; }
+  #dot.connecting { background: #f5a524; }
+  #dot.open { background: #30a46c; }
+  #join {
+    position: fixed; inset: 0; z-index: 5; border: 0; margin: 0; cursor: pointer;
+    background: #0b0612; color: #fff; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px; font: 700 28px/1.2 system-ui, sans-serif;
+  }
+  #join small { font: 500 14px/1.4 system-ui, sans-serif; color: rgba(255, 255, 255, .55); max-width: 80vw; }
+  #join.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="caption"></div></div>
+<div id="status"><span id="dot"></span><span id="info">OFFLINE</span></div>
+<button id="join" type="button">Tap to join<small>Keeps this screen awake and shows your share of the live captions.</small></button>
+<style id="fontface"></style>
+<script>
+(function () {
+  "use strict";
+  var HUE_STEP = 137.5, COLOR_EVERY_MS = 2000, COLOR_FADE_MS = 700;
+  var cap = document.getElementById("caption");
+  var dot = document.getElementById("dot");
+  var info = document.getElementById("info");
+  var joinBtn = document.getElementById("join");
+  var root = document.documentElement;
+
+  var params = new URLSearchParams(location.search);
+  var token = params.get("t") || "";
+  var secure = location.protocol === "https:";
+  var pagePort = parseInt(location.port || (secure ? "443" : "80"), 10);
+  var wsUrl = (secure ? "wss://" : "ws://") + location.hostname + ":" + (pagePort + 1) + "/" +
+              (token ? "?t=" + encodeURIComponent(token) : "");
+
+  var style = { size: 120, hold_ms: 2500, glow: 120, cycle: true, accent: "#FFD23F", uppercase: false };
+  var devices = 0, joined = false, rejected = false;
+  var socket = null, attempt = 0, retryTimer = null, holdTimer = null;
+  var wake = null;
+
+  // ---- colour (port of rotating_palette in overlay.py) -------------------
+
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360;
+    var c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+    var r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+  }
+  function luminance(rgb) {
+    var ch = rgb.map(function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  }
+  function contrast(a, b) {
+    var hi = Math.max(luminance(a), luminance(b)), lo = Math.min(luminance(a), luminance(b));
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  function rotatingPalette(hue) {
+    var bgBottom = hslToRgb(hue + 40, 0.75, 0.24);
+    var light = 0.62, accent = hslToRgb(hue + 180, 1.0, light);
+    // Blue and violet are dark at any saturation; lift them until they clear 4.5:1.
+    while (contrast(accent, bgBottom) < 4.5 && light < 0.86) {
+      light += 0.02;
+      accent = hslToRgb(hue + 180, 1.0, light);
+    }
+    return { bg_top: hslToRgb(hue, 0.70, 0.11), bg_bottom: bgBottom,
+             text: hslToRgb(hue + 180, 0.25, 0.94), accent: accent };
+  }
+  function hexToRgb(hex) {
+    var h = String(hex).replace("#", "");
+    return [parseInt(h.slice(0, 2), 16) || 0, parseInt(h.slice(2, 4), 16) || 0, parseInt(h.slice(4, 6), 16) || 0];
+  }
+  function css(rgb) { return "rgb(" + Math.round(rgb[0]) + "," + Math.round(rgb[1]) + "," + Math.round(rgb[2]) + ")"; }
+
+  function applyColors(c) {
+    root.style.setProperty("--bg-top", css(c.bg_top));
+    root.style.setProperty("--bg-bottom", css(c.bg_bottom));
+    root.style.setProperty("--text", css(c.text));
+    root.style.setProperty("--accent", css(c.accent));
+    // A heavy halo in an arbitrary rotating hue muddies the letter edges; cap it while cycling.
+    var alpha = (style.cycle ? Math.min(style.glow, 120) : style.glow) / 255;
+    var a = Math.round(c.accent[0]) + "," + Math.round(c.accent[1]) + "," + Math.round(c.accent[2]);
+    root.style.setProperty("--glow", alpha > 0
+      ? "0 0 .14em rgba(" + a + "," + alpha.toFixed(2) + "), 0 0 .42em rgba(" + a + "," + (alpha * 0.8).toFixed(2) + ")"
+      : "none");
+  }
+
+  var hue = 270, hueTimer = null, hueFrame = 0;
+  function tweenHue(to) {
+    var from = hue, start = performance.now();
+    cancelAnimationFrame(hueFrame);
+    (function step(now) {
+      var t = Math.min(1, (now - start) / COLOR_FADE_MS);
+      hue = from + (to - from) * (-(Math.cos(Math.PI * t) - 1) / 2);
+      applyColors(rotatingPalette(hue));
+      if (t < 1) hueFrame = requestAnimationFrame(step);
+    })(start);
+  }
+  function restartCycle() {
+    clearInterval(hueTimer);
+    cancelAnimationFrame(hueFrame);
+    if (style.cycle) {
+      applyColors(rotatingPalette(hue));
+      hueTimer = setInterval(function () { if (!document.hidden) tweenHue(hue + HUE_STEP); }, COLOR_EVERY_MS);
+    } else {
+      applyColors({ bg_top: hexToRgb(style.bg_top), bg_bottom: hexToRgb(style.bg_bottom),
+                    text: hexToRgb(style.text), accent: hexToRgb(style.accent) });
+    }
+  }
+
+  // ---- caption -----------------------------------------------------------
+
+  function fit() {
+    if (!cap.textContent) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    var px = Math.max(16, style.size * Math.min(w, h * 1.5) / 700);
+    cap.style.fontSize = px + "px";
+    for (var i = 0; i < 60 && px > 14 &&
+         (cap.scrollWidth > cap.clientWidth + 1 || cap.offsetHeight > h * 0.72); i++) {
+      px *= 0.92;
+      cap.style.fontSize = px + "px";
+    }
+  }
+  function clearCaption() {
+    clearTimeout(holdTimer);
+    cap.textContent = "";
+  }
+  function showCaption(text) {
+    cap.textContent = text;
+    fit();
+    cap.classList.remove("pop");
+    void cap.offsetWidth;   // restart the fade-in
+    cap.classList.add("pop");
+    clearTimeout(holdTimer);   // only the newest chunk's timer survives
+    holdTimer = setTimeout(clearCaption, style.hold_ms);
+  }
+
+  function applyStyle(m) {
+    style = m;
+    var font = m.font || {};
+    document.getElementById("fontface").textContent = font.file && font.family
+      ? "@font-face{font-family:" + JSON.stringify(font.family) + ";src:url(/fonts/" + encodeURIComponent(font.file) +
+        ") format('truetype');font-display:swap}"
+      : "";
+    root.style.setProperty("--font", m.families_css || "sans-serif");
+    root.style.setProperty("--transform", m.uppercase ? "uppercase" : "none");
+    cap.style.letterSpacing = m.uppercase ? "0.02em" : "0";
+    restartCycle();
+    fit();
+    if (document.fonts && font.family) {
+      document.fonts.load("1em " + JSON.stringify(font.family)).then(fit, function () {});
+    }
+  }
+
+  // ---- connection --------------------------------------------------------
+
+  function setStatus(state, label) {
+    dot.className = state;
+    info.textContent = label;
+  }
+  function showDevices() {
+    if (socket && socket.readyState === 1) {
+      setStatus("open", devices + (devices === 1 ? " DEVICE" : " DEVICES"));
+    }
+  }
+  function send(obj) {
+    if (socket && socket.readyState === 1) socket.send(JSON.stringify(obj));
+  }
+  function scheduleRetry() {
+    if (!joined || rejected || retryTimer) return;
+    var delay = Math.min(10000, 500 * Math.pow(2, attempt++)) * (0.8 + Math.random() * 0.4);
+    setStatus("", "RECONNECTING");
+    retryTimer = setTimeout(function () { retryTimer = null; connect(); }, delay);
+  }
+  function connect() {
+    if (socket && socket.readyState <= 1) return;
+    setStatus("connecting", "CONNECTING");
+    var ws;
+    try { ws = new WebSocket(wsUrl); } catch (e) { scheduleRetry(); return; }
+    socket = ws;
+    ws.onopen = function () {
+      attempt = 0;
+      showDevices();
+      send({ type: "hello", ua: navigator.userAgent, w: window.innerWidth, h: window.innerHeight });
+    };
+    ws.onmessage = function (event) {
+      var m;
+      try { m = JSON.parse(event.data); } catch (e) { return; }
+      if (!m || typeof m.type !== "string") return;
+      if (m.type === "hello") { devices = m.devices | 0; showDevices(); }
+      else if (m.type === "style") applyStyle(m);
+      else if (m.type === "caption" && typeof m.text === "string") showCaption(m.text);
+      else if (m.type === "clear") clearCaption();
+      else if (m.type === "devices") { devices = m.n | 0; showDevices(); }
+      else if (m.type === "ping") send({ type: "pong" });
+    };
+    ws.onclose = function (event) {
+      if (ws !== socket) return;
+      if (event.code === 1008) {   // wrong or missing token: retrying cannot help
+        rejected = true;
+        setStatus("", "INVALID LINK - RESCAN");
+        return;
+      }
+      scheduleRetry();
+    };
+    ws.onerror = function () { /* onclose follows */ };
+  }
+
+  // ---- join gesture ------------------------------------------------------
+
+  function lockScreen() {
+    try {
+      if (!("wakeLock" in navigator) || wake) return;
+      navigator.wakeLock.request("screen").then(function (lock) {
+        wake = lock;
+        lock.addEventListener("release", function () { wake = null; });
+      }, function () {});
+    } catch (e) { /* not supported */ }
+  }
+  joinBtn.addEventListener("click", function () {
+    joined = true;
+    joinBtn.classList.add("hidden");
+    try {
+      var el = document.documentElement;
+      var req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) { var p = req.call(el); if (p && p.catch) p.catch(function () {}); }
+    } catch (e) { /* iPhone Safari has no fullscreen */ }
+    lockScreen();
+    connect();
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden || !joined) return;
+    lockScreen();
+    if (!socket || socket.readyState > 1) { clearTimeout(retryTimer); retryTimer = null; connect(); }
+  });
+  window.addEventListener("resize", fit);
+  window.addEventListener("orientationchange", fit);
+
+  restartCycle();
+})();
+</script>
+</body>
+</html>
