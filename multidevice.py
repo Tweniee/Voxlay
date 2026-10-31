@@ -1,6 +1,6 @@
+import dataclasses
 import os
 import sys
-from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 from voxlay.overlay import CaptionOverlay
 from voxlay.audio import AudioCapture
@@ -15,6 +15,7 @@ def main():
 
     route = RouteConfig.load()
     route.save()  # persists the generated token so devices can reconnect after a restart
+    route = dataclasses.replace(route, mode="pair", min_words=1, max_words=3, random_size=True)
     style = StyleConfig.load()
 
     overlay = CaptionOverlay()
@@ -31,32 +32,36 @@ def main():
         connect_hint = f"Open on other devices: {server.url()}"
         print(connect_hint, flush=True)
         server.set_style(style.to_message())
-        router = Router(server, route)
-        mirror = route.host_mode == "mirror"
-        hold = QTimer(overlay)
-        hold.setSingleShot(True)
-        hold.timeout.connect(overlay.clear_caption)
-
-        def host_chunk(chunk):
-            overlay.set_caption(chunk)
-            hold.start(style.hold_ms)
+        # The app forces pair mode (see above); Router also supports random/loop, but nothing here wires them.
+        router = Router(server, route, hold_ms=style.hold_ms)
 
         def clear_all():
             router.clear()
+            overlay.clear_caption()
             server.broadcast({"type": "clear"})
 
         def on_caption(committed, partial):
-            if not (committed or partial):  # engine blanked the caption after silence
-                clear_all()
+            if not server.client_ids():
+                overlay.set_caption(committed, partial)  # nobody connected: full live caption
+            elif not (committed or partial) and not router.busy():
+                clear_all()  # silence; while pairs are queued or held the router clears itself
+
+        def on_joined(_client_id):
+            if len(server.client_ids()) == 1:
+                overlay.clear_caption()  # full-caption mode ends; pairs take over from the next phrase
+
+        def on_left(_client_id):
+            if not server.client_ids():
+                router.clear()
+                overlay.clear_caption()
 
         worker.committed.connect(router.on_committed)
         worker.caption.connect(on_caption)
+        router.chunk_for_host.connect(overlay.set_caption)
+        router.host_clear.connect(overlay.clear_caption)
+        server.client_joined.connect(on_joined)
+        server.client_left.connect(on_left)
         overlay.clear_requested.connect(clear_all)
-        if mirror:
-            worker.caption.connect(overlay.set_caption)
-        else:
-            router.chunk_for_host.connect(host_chunk)
-            worker.caption.connect(lambda c, p: not (c or p) and overlay.clear_caption())
     else:
         QMessageBox.warning(None, "Multi-device unavailable",
                             f"Could not start the LAN server (ports {route.port}-{route.port + 1} "

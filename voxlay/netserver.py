@@ -12,7 +12,7 @@ from PySide6.QtWebSockets import QWebSocket, QWebSocketProtocol, QWebSocketServe
 from .config import FONT_DIR
 
 WEB_DIR = Path(__file__).parent / "web"
-PING_EVERY_MS = 15000
+PING_EVERY_MS = 5000
 MAX_MISSED_PONGS = 2
 MAX_CLIENTS = 32
 MAX_MESSAGE_BYTES = 4096        # clients only ever send tiny hello / pong frames

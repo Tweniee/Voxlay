@@ -170,14 +170,15 @@
     clearTimeout(holdTimer);
     cap.textContent = "";
   }
-  function showCaption(text) {
+  function showCaption(text, hold) {
     cap.textContent = text;
     fit();
     cap.classList.remove("pop");
     void cap.offsetWidth;   // restart the fade-in
     cap.classList.add("pop");
     clearTimeout(holdTimer);   // only the newest chunk's timer survives
-    holdTimer = setTimeout(clearCaption, style.hold_ms);
+    // The server sends an explicit clear; hold_ms (when given) is only a fallback if that frame is lost.
+    holdTimer = setTimeout(clearCaption, hold > 0 ? hold : style.hold_ms);
   }
 
   function applyStyle(m) {
@@ -234,7 +235,7 @@
       if (!m || typeof m.type !== "string") return;
       if (m.type === "hello") { devices = m.devices | 0; showDevices(); }
       else if (m.type === "style") applyStyle(m);
-      else if (m.type === "caption" && typeof m.text === "string") showCaption(m.text);
+      else if (m.type === "caption" && typeof m.text === "string") showCaption(m.text, +m.hold_ms);
       else if (m.type === "clear") clearCaption();
       else if (m.type === "devices") { devices = m.n | 0; showDevices(); }
       else if (m.type === "ping") send({ type: "pong" });

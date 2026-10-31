@@ -5,6 +5,11 @@ from PySide6.QtCore import QObject, QTimer, Signal
 HOST = "host"            # pseudo client id for the machine running Voxlay
 STAGGER_MS = (150, 250)  # pause between chunks of one phrase
 MAX_PENDING = 12         # chunks waiting to be sent; the oldest are dropped beyond this
+MAX_PENDING_PAIRS = 6    # pair mode: pairs waiting behind the one on screen; the oldest are dropped
+PAIR_BASE_MS = 400       # pair mode: hold = base + per-word, clamped to [PAIR_MIN_MS, style hold_ms]
+PAIR_WORD_MS = 300
+PAIR_MIN_MS = 900
+PAGE_GRACE_MS = 1000     # a remote page's own timer is only a fallback, this long after the server's clear
 
 
 def split_chunks(words, min_w, max_w, random_size, rng):
@@ -31,14 +36,20 @@ def split_chunks(words, min_w, max_w, random_size, rng):
 
 
 class Router(QObject):
-    """Splits each committed phrase into chunks and hands every chunk to ONE device."""
+    """Splits each committed phrase into chunks. Random/loop: each chunk goes to ONE device.
+    Pair: chunks go out two at a time, left = host, right = newest remote, both swapped together."""
     chunk_for_host = Signal(str)
     chunk_sent = Signal(str, str)   # (client id, chunk), HOST for the local screen
+    host_clear = Signal()           # pair mode: the host half has finished its hold
 
-    def __init__(self, server, config, rng=None, parent=None):
+    def __init__(self, server, config, rng=None, hold_ms=2500, parent=None):
         super().__init__(parent)
         self._server = server
         self._config = config
+        self._hold_ms = hold_ms
+        self._pairs = deque()
+        self._shown = False
+        self._phrase = 0
         self._rng = rng or random.Random()
         self._pending = deque()
         self._last_id = None
@@ -46,18 +57,37 @@ class Router(QObject):
         self._seq = 0
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self._pump)
+        self._timer.timeout.connect(self._tick)
 
     def set_config(self, config):
         self._config = config
+        if config.mode != "pair":
+            self._pairs.clear()
+            self._shown = False
+
+    def busy(self):
+        """Pair mode: a pair is on screen or waiting."""
+        return self._shown or bool(self._pairs)
 
     def clear(self):
         self._pending.clear()
+        self._pairs.clear()
+        self._shown = False
         self._timer.stop()
+
+    def _tick(self):
+        if self._config.mode == "pair":
+            self._show_next()
+        else:
+            self._shown = False
+            self._pump()
 
     def on_committed(self, text):
         c = self._config
         chunks = split_chunks(text, c.min_words, c.max_words, c.random_size, self._rng)
+        if c.mode == "pair":
+            self._queue_pairs(chunks)
+            return
         self._pending.extend(chunks)
         while len(self._pending) > MAX_PENDING:
             self._pending.popleft()
@@ -70,6 +100,47 @@ class Router(QObject):
         self._dispatch(self._pending.popleft())
         if self._pending:
             self._timer.start(self._rng.randint(*STAGGER_MS))
+
+    def _queue_pairs(self, chunks):
+        if not self._server.client_ids():
+            return   # nobody to pair with: the host shows the full caption itself
+        self._phrase += 1
+        for i in range(0, len(chunks), 2):
+            self._pairs.append((self._phrase, chunks[i], chunks[i + 1] if i + 1 < len(chunks) else ""))
+        # Over the cap: drop whole older phrases, oldest first; the phrase just queued is never trimmed.
+        while len(self._pairs) > MAX_PENDING_PAIRS and self._pairs[0][0] != self._phrase:
+            old = self._pairs[0][0]
+            while self._pairs and self._pairs[0][0] == old:
+                self._pairs.popleft()
+        if not self._timer.isActive():
+            self._show_next()
+
+    def _show_next(self):
+        remote = self._server.client_ids()
+        if not self._pairs or not remote:
+            self._pairs.clear()
+            if self._shown:
+                self._shown = False
+                self.host_clear.emit()
+                self._server.broadcast({"type": "clear"})
+            return
+        _, left, right = self._pairs.popleft()
+        hold = min(self._hold_ms, max(PAIR_MIN_MS, PAIR_BASE_MS + PAIR_WORD_MS * len((left + " " + right).split())))
+        self._shown = True
+        self.chunk_for_host.emit(left)
+        self.chunk_sent.emit(HOST, left)
+        target = remote[-1]   # newest join wins: a reconnect beats its half-open predecessor
+        if right:
+            self._seq += 1
+            msg = {"type": "caption", "id": target, "seq": self._seq, "text": right,
+                   "hold_ms": hold + PAGE_GRACE_MS}
+            if self._server.send_to(target, msg):
+                self.chunk_sent.emit(target, right)
+            else:
+                self._server.send_to(target, {"type": "clear"})   # don't leave an old chunk up
+        else:
+            self._server.send_to(target, {"type": "clear"})   # odd tail: right screen goes blank
+        self._timer.start(hold)
 
     def _pool(self):
         remote = list(self._server.client_ids())
