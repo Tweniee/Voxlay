@@ -27,7 +27,7 @@ REPEAT_PHRASE_RE = re.compile(r"(?<!\S)(\S+(?:\s+\S+){1,3}?)(?:[\s,]+\1(?![^\s,]
 REPEAT_CHARS_RE = re.compile(r"((?:(?!\d)\S){1,4}?)\1{3,}")   # digits excluded: 10000 is not a loop
 
 
-LANGUAGES = [c.strip() for c in os.getenv("TWENIEE_LANGS", "en,hi").split(",") if c.strip()] or ["en", "hi"]
+LANGUAGES = [c.strip() for c in os.getenv("VOXLAY_LANGS", "en,hi").split(",") if c.strip()] or ["en", "hi"]
 LOOP_RATIO = 2.4            # zlib ratio above this means the decoder got stuck repeating itself
 NO_SPEECH_PROB = 0.6        # with LOW_LOGPROB: Whisper's own "this is not speech" rule
 LOW_LOGPROB = -1.0
@@ -138,7 +138,7 @@ class TranscriptionWorker(QThread):
         self._stopping = False
         self._backend = None
         self._clear_requested = False
-        self._language = os.getenv("TWENIEE_LANG") or None
+        self._language = os.getenv("VOXLAY_LANG") or None
         self._fixed_language = bool(self._language)
         self._reset_state()
 
@@ -183,8 +183,8 @@ class TranscriptionWorker(QThread):
             pass
 
     def _load_model(self):
-        model_name = os.getenv("TWENIEE_MODEL", "small")
-        backend = os.getenv("TWENIEE_BACKEND")
+        model_name = os.getenv("VOXLAY_MODEL", "small")
+        backend = os.getenv("VOXLAY_BACKEND")
         if backend is None:
             apple_silicon = sys.platform == "darwin" and platform.machine() == "arm64"
             backend = "mlx" if apple_silicon else "faster-whisper"
@@ -192,8 +192,8 @@ class TranscriptionWorker(QThread):
         if backend == "mlx":
             self._backend = _MlxBackend(model_name)
         else:
-            device = os.getenv("TWENIEE_DEVICE", "cpu")
-            compute = os.getenv("TWENIEE_COMPUTE", "int8" if device == "cpu" else "float16")
+            device = os.getenv("VOXLAY_DEVICE", "cpu")
+            compute = os.getenv("VOXLAY_COMPUTE", "int8" if device == "cpu" else "float16")
             self._backend = _FasterWhisperBackend(model_name, device, compute)
         if self._stopping:
             return

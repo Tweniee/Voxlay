@@ -1,13 +1,13 @@
 import os
 import sys
 from PySide6.QtWidgets import QApplication, QMessageBox
-from tweniee.overlay import CaptionOverlay
-from tweniee.audio import AudioCapture
-from tweniee.engine import TranscriptionWorker
+from voxlay.overlay import CaptionOverlay
+from voxlay.audio import AudioCapture
+from voxlay.engine import TranscriptionWorker
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Tweniee")
+    app.setApplicationName("Voxlay")
 
     overlay = CaptionOverlay()
     overlay.showFullScreen()

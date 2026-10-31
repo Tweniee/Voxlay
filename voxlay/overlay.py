@@ -151,7 +151,7 @@ class CaptionOverlay(QWidget):
         _load_fonts()
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self._settings = QSettings("Tweniee", "Tweniee")
+        self._settings = QSettings("Voxlay", "Voxlay")
         self._scale = min(2.0, max(0.4, float(self._settings.value("scale", 1.0, type=float))))
         self._wheel = 0
         self._cycle = self._settings.value("cycle", True, type=bool)
@@ -205,7 +205,7 @@ class CaptionOverlay(QWidget):
         self.fade.valueChanged.connect(self._set_alpha)
 
         self.dot = LiveDot()
-        self.status = QLabel("Starting Tweniee…")
+        self.status = QLabel("Starting Voxlay…")
         self.status.setObjectName("status")
         self.hints = QLabel(HINTS)
         self.hints.setObjectName("hints")
